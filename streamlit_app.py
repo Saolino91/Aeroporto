@@ -2,7 +2,7 @@
 
 """
 App Streamlit per:
-1. Caricare un PDF con orari voli (febbraio 2026).
+1. Caricare un PDF con orari voli (qualsiasi mese, tipo Feb/Mar 2026).
 2. Parsare i voli PAX, anche quando un giorno è spezzato su più tabelle / pagine.
 3. Raggruppare per giorno della settimana.
 4. Visualizzare una matrice voli × date con interfaccia curata.
@@ -35,9 +35,25 @@ WEEKDAY_LABELS_IT = {
     "Sun": "Domenica",
 }
 
+# pattern generico: Sun 1 Mar 2026, Mon 2 Feb 2026, ecc.
 DAY_PATTERN = re.compile(
-    r"^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+(\d{1,2})\s+Feb\s+2026$"
+    r"^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$"
 )
+
+MONTH_MAP = {
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
+}
 
 
 # =========================
@@ -46,13 +62,13 @@ DAY_PATTERN = re.compile(
 
 def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
     """
-    Parser per il PDF "orario voli febbraio 2026".
+    Parser per il PDF con orario voli (es. febbraio o marzo 2026).
 
     Logica:
     - divide orizzontalmente la pagina in 7 colonne di uguale larghezza;
     - per ogni tabella:
         * calcola la colonna dal centro orizzontale (xc);
-        * se la prima cella è tipo "Sun 22 Feb 2026" → nuova data e weekday per quella colonna;
+        * se la prima cella è tipo "Sun 22 Mar 2026" → nuova data e weekday per quella colonna;
         * altrimenti la tabella è continuazione del giorno corrente in quella colonna;
     - per ogni tabella con data nota legge le righe voli:
         Flight, Route, A/D, Type, ETA, ETD.
@@ -100,11 +116,21 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
                 first_cell = (first_row[0] or "").strip() if first_row else ""
                 m = DAY_PATTERN.match(first_cell)
 
-                # caso 1: tabella con intestazione del giorno (es. "Sun 22 Feb 2026")
+                # caso 1: tabella con intestazione del giorno (es. "Sun 22 Mar 2026")
                 if m:
                     weekday = m.group(1)
                     day_num = int(m.group(2))
-                    cur_date = date(2026, 2, day_num)
+                    month_str = m.group(3)
+                    year = int(m.group(4))
+
+                    month_num = MONTH_MAP.get(month_str)
+                    if month_num is None:
+                        # mese non riconosciuto → salta questa tabella
+                        current_date_by_col[col] = None
+                        current_weekday_by_col[col] = None
+                        continue
+
+                    cur_date = date(year, month_num, day_num)
                     current_date_by_col[col] = cur_date
                     current_weekday_by_col[col] = weekday
                     start_idx = 2  # riga 1 = header "Flight RouteA/D Type ETA ETD"
@@ -285,7 +311,6 @@ def style_time(row: pd.Series):
             styles.append("")
             continue
 
-        # colonne data: se c'è un orario e abbiamo un colore, applicalo
         if pd.notna(row[col]) and row[col] != "" and color is not None:
             styles.append(f"color: {color};")
         else:
@@ -304,7 +329,7 @@ def main():
         layout="wide",
     )
 
-    # ---- CSS custom per look più moderno ----
+    # ---- CSS custom ----
     st.markdown(
         """
         <style>
@@ -379,7 +404,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Titolo con icone aereo
+    # Titolo
     st.title("✈️ Flight Matrix")
 
     # Intro card
@@ -416,7 +441,7 @@ def main():
         st.error("Non sono stati trovati voli PAX o la struttura del PDF non è riconosciuta.")
         return
 
-    # Piccole metriche di riepilogo globali
+    # Metriche globali
     unique_days = sorted(flights_df["Date"].unique())
     num_days = len(unique_days)
     num_flights = len(flights_df)
@@ -462,7 +487,7 @@ def main():
     weekday_flights_count = len(weekday_ops)
     weekday_dates_count = weekday_ops["Date"].nunique()
 
-    # Badge con giorno della settimana
+    # Badge giorno
     st.markdown(
         f"""
         <div style="margin-top: 1.2rem; margin-bottom: 0.3rem;">
@@ -478,7 +503,7 @@ def main():
     # Numero voli per tipologia di giorno
     st.markdown(
         f"**Voli PAX per questo tipo di giorno:** {weekday_flights_count} "
-        f"(su {weekday_dates_count} {label_it.lower()} di febbraio)"
+        f"(su {weekday_dates_count} {label_it.lower()} nel periodo caricato)"
     )
 
     # Legend arrivi/partenze
@@ -501,7 +526,7 @@ def main():
     # Rinomina colonne per la visualizzazione
     display_df = matrix_df.rename(columns={"Flight": "Codice Volo", "Route": "Aeroporto"})
 
-    # Applica stile AD + orari
+    # Stile AD + orari
     if "AD" in display_df.columns:
         styled_df = (
             display_df
@@ -510,11 +535,11 @@ def main():
             .applymap(style_ad, subset=["AD"])
         )
     else:
-        styled_df = display_df.style  # fallback
+        styled_df = display_df.style
 
     st.dataframe(styled_df, use_container_width=True, height=650)
 
-    # Export CSV (con intestazioni italiane)
+    # Export CSV
     csv_buffer = display_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="⬇️ Scarica matrice in CSV",
@@ -522,7 +547,6 @@ def main():
         file_name=f"flight_matrix_{label_it.lower()}.csv",
         mime="text/csv",
     )
-
 
 
 if __name__ == "__main__":
