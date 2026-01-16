@@ -5,7 +5,7 @@ App Streamlit per:
 1. Caricare un PDF con orari voli (febbraio 2026).
 2. Parsare i voli PAX, anche quando un giorno è spezzato su più tabelle / pagine.
 3. Raggruppare per giorno della settimana.
-4. Visualizzare una matrice voli × date.
+4. Visualizzare una matrice voli × date con interfaccia curata.
 5. Esportare la matrice in CSV.
 """
 
@@ -53,8 +53,7 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
     - per ogni tabella:
         * calcola la colonna dal centro orizzontale (xc);
         * se la prima cella è tipo "Sun 22 Feb 2026" → nuova data e weekday per quella colonna;
-        * altrimenti la tabella è continuazione del giorno corrente in quella colonna
-          (es. parte bassa di un giorno spezzato sul foglio successivo);
+        * altrimenti la tabella è continuazione del giorno corrente in quella colonna;
     - per ogni tabella con data nota legge le righe voli:
         Flight, Route, A/D, Type, ETA, ETD.
 
@@ -115,7 +114,7 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
                     cur_date = current_date_by_col[col]
                     cur_weekday = current_weekday_by_col[col]
                     if cur_date is None or cur_weekday is None:
-                        # tabella fuori da una colonna "attiva": ignoro
+                        # tabella fuori da una colonna "attiva": ignora
                         continue
 
                     # se la prima cella è "Flight", è un header ripetuto
@@ -250,29 +249,46 @@ def build_matrix_for_weekday(flights: pd.DataFrame, weekday: str) -> pd.DataFram
 
 
 # =========================
+# STYLING PER LA VIEW
+# =========================
+
+def style_ad(val: str) -> str:
+    """
+    Stile per la colonna A/D:
+    - P → rosso, grassetto
+    - A → verde, grassetto
+    """
+    if val == "P":
+        return "color: red; font-weight: bold;"
+    if val == "A":
+        return "color: green; font-weight: bold;"
+    return ""
+
+
+# =========================
 # UI STREAMLIT
 # =========================
 
 def main():
     st.set_page_config(
-        page_title="Flight Matrix (PAX only) - February 2026",
+        page_title="Flight Matrix",
         layout="wide",
     )
 
-    st.title("📅 Flight Matrix PAX – Febbraio 2026")
+    # Titolo con icone aereo
+    st.title("✈️ Flight Matrix")
 
     st.markdown(
         """
-        Carica il **PDF con gli orari voli** di febbraio 2026.
+🛫🛬  
+Carica il **PDF con gli orari dei voli**.
 
-        L'app:
-        - considera **solo voli passeggeri (PAX)**,
-        - esclude i voli **CARGO**,
-        - raggruppa per **giorno della settimana**,
-        - mostra una **matrice** con:
-            - righe = `Flight`, `Route`, `A/D`,
-            - colonne = date del mese,
-            - celle = ETA / ETD a seconda del tipo (arrivo/partenza).
+L'app:
+
+- considera **solo voli passeggeri (PAX)**
+- esclude i voli **CARGO**
+- raggruppa per **giorno della settimana**
+- mostra una **matrice** con i voli per tipologia giorno
         """
     )
 
@@ -311,29 +327,29 @@ def main():
         st.warning("Per il giorno selezionato non sono stati trovati voli PAX con orari validi.")
         return
 
+    # Sottotitolo: solo giorno della settimana in italiano
     label_it = WEEKDAY_LABELS_IT.get(selected_weekday, selected_weekday)
-    st.subheader(f"Matrice voli PAX – {selected_weekday} ({label_it})")
-    st.caption("Righe = Flight, Route, A/D – Colonne = date di febbraio 2026 – Celle = ETA/ETD.")
+    st.subheader(label_it)
 
-    st.dataframe(matrix_df, use_container_width=True, height=600)
+    # Rinomina colonne per la visualizzazione
+    display_df = matrix_df.rename(columns={"Flight": "Codice Volo", "Route": "Aeroporto"})
 
-    # Export CSV
-    csv_buffer = matrix_df.to_csv(index=False).encode("utf-8")
+    # Applica stile alla colonna AD
+    if "AD" in display_df.columns:
+        styled_df = display_df.style.applymap(style_ad, subset=["AD"])
+    else:
+        styled_df = display_df.style  # fallback, non dovrebbe succedere
+
+    st.dataframe(styled_df, use_container_width=True, height=600)
+
+    # Export CSV (con intestazioni italiane)
+    csv_buffer = display_df.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="⬇️ Scarica matrice in CSV",
         data=csv_buffer,
-        file_name=f"flight_matrix_{selected_weekday.lower()}.csv",
+        file_name=f"flight_matrix_{label_it.lower()}.csv",
         mime="text/csv",
     )
-
-    # Debug / verifica nel sidebar
-    with st.sidebar.expander("Dettagli dataset", expanded=False):
-        st.write("Date riconosciute:")
-        st.write(sorted(flights_df["Date"].unique()))
-        st.write("Numero voli PAX per data:")
-        st.dataframe(
-            flights_df.groupby("Date")["Flight"].count().rename("N_voli").to_frame()
-        )
 
 
 if __name__ == "__main__":
