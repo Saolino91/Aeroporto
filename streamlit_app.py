@@ -252,15 +252,27 @@ def build_matrix_for_weekday(flights: pd.DataFrame, weekday: str) -> pd.DataFram
 # STYLING PER LA VIEW
 # =========================
 
-def style_ad(val: str):
+def style_ad(val: str) -> str:
+    """
+    Colore per la colonna AD:
+    - P → rosso
+    - A → verde
+    """
     if val == "P":
         return "color: red;"
     if val == "A":
         return "color: green;"
     return ""
-    
-def style_time(row):
-    ad = row["A/D"] if "A/D" in row else row["AD"]
+
+
+def style_time(row: pd.Series):
+    """
+    Colora gli orari (colonne data) in base al valore di AD nella riga:
+    - se AD = P → orari rossi
+    - se AD = A → orari verdi
+    """
+    # in display_df la colonna è AD, non A/D
+    ad = row.get("AD", None)
     color = None
     if ad == "P":
         color = "red"
@@ -269,15 +281,17 @@ def style_time(row):
 
     styles = []
     for col in row.index:
-        if col in ("Codice Volo", "Aeroporto", "A/D", "AD"):
+        # non coloriamo le colonne descrittive
+        if col in ("Codice Volo", "Aeroporto", "AD"):
             styles.append("")
             continue
-        if row[col] and color:
+
+        # colonne data: se c'è un orario e abbiamo un colore, applicalo
+        if pd.notna(row[col]) and row[col] != "" and color is not None:
             styles.append(f"color: {color};")
         else:
             styles.append("")
     return styles
-
 
 
 # =========================
@@ -349,17 +363,16 @@ L'app:
     # Rinomina colonne per la visualizzazione
     display_df = matrix_df.rename(columns={"Flight": "Codice Volo", "Route": "Aeroporto"})
 
-    # Applica stile alla colonna AD
+    # Applica stile AD + orari
     if "AD" in display_df.columns:
         styled_df = (
-    display_df
-    .style
-    .apply(lambda r: style_time(r), axis=1)
-    .applymap(style_ad, subset=["A/D"])
-)
-
+            display_df
+            .style
+            .apply(style_time, axis=1)
+            .applymap(style_ad, subset=["AD"])
+        )
     else:
-        styled_df = display_df.style  # fallback, non dovrebbe succedere
+        styled_df = display_df.style  # fallback
 
     st.dataframe(styled_df, use_container_width=True, height=600)
 
