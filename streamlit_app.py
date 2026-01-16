@@ -112,6 +112,9 @@ def extract_date(line: str) -> datetime | None:
                     pass  # Salta date non valide
     return None
 
+WEEKDAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
 def build_full_matrix(data: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """
     Costruisce una matrice per ogni giorno della settimana.
