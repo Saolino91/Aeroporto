@@ -252,17 +252,32 @@ def build_matrix_for_weekday(flights: pd.DataFrame, weekday: str) -> pd.DataFram
 # STYLING PER LA VIEW
 # =========================
 
-def style_ad(val: str) -> str:
-    """
-    Stile per la colonna A/D:
-    - P → rosso, grassetto
-    - A → verde, grassetto
-    """
+def style_ad(val: str):
     if val == "P":
-        return "color: red; font-weight: bold;"
+        return "color: red;"
     if val == "A":
-        return "color: green; font-weight: bold;"
+        return "color: green;"
     return ""
+    
+def style_time(row):
+    ad = row["A/D"] if "A/D" in row else row["AD"]
+    color = None
+    if ad == "P":
+        color = "red"
+    elif ad == "A":
+        color = "green"
+
+    styles = []
+    for col in row.index:
+        if col in ("Codice Volo", "Aeroporto", "A/D", "AD"):
+            styles.append("")
+            continue
+        if row[col] and color:
+            styles.append(f"color: {color};")
+        else:
+            styles.append("")
+    return styles
+
 
 
 # =========================
@@ -336,7 +351,13 @@ L'app:
 
     # Applica stile alla colonna AD
     if "AD" in display_df.columns:
-        styled_df = display_df.style.applymap(style_ad, subset=["AD"])
+        styled_df = (
+    display_df
+    .style
+    .apply(lambda r: style_time(r), axis=1)
+    .applymap(style_ad, subset=["A/D"])
+)
+
     else:
         styled_df = display_df.style  # fallback, non dovrebbe succedere
 
