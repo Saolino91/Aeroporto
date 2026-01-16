@@ -3,7 +3,7 @@
 """
 App Streamlit per:
 1. Caricare un PDF con orari voli (febbraio 2026).
-2. Parsare le tabelle giornaliere (solo PAX), anche se un giorno è spezzato su più tabelle / pagine.
+2. Parsare i voli PAX, anche quando un giorno è spezzato su più tabelle / pagine.
 3. Raggruppare per giorno della settimana.
 4. Visualizzare una matrice voli × date.
 5. Esportare la matrice in CSV.
@@ -35,70 +35,57 @@ WEEKDAY_LABELS_IT = {
     "Sun": "Domenica",
 }
 
-
-# =========================
-# PARSING PDF CON COLONNE
-# =========================
-
 DAY_PATTERN = re.compile(
     r"^(Sun|Mon|Tue|Wed|Thu|Fri|Sat)\s+(\d{1,2})\s+Feb\s+2026$"
 )
 
 
+# =========================
+# PARSING PDF
+# =========================
+
 def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
     """
     Parser per il PDF "orario voli febbraio 2026".
 
-    Idea:
-    - dalla prima pagina ricavo la posizione X delle 7 colonne (Mon..Sun)
-      leggendo le tabelle con intestazione 'Mon 2 Feb 2026', ecc.
-    - percorro tutte le pagine, tutte le tabelle (find_tables, che dà anche il bbox):
-        * se la prima cella è 'Mon 16 Feb 2026' → setto current_date e weekday
-          per quella colonna
-        * altrimenti considero la tabella come "continuazione" del giorno corrente
-          di quella colonna (overflow a fondo pagina / inizio pagina successiva)
-    - per ogni tabella con un current_date valido, estraggo i voli:
+    Logica:
+    - divide orizzontalmente la pagina in 7 colonne di uguale larghezza;
+    - per ogni tabella:
+        * calcola la colonna dal centro orizzontale (xc);
+        * se la prima cella è tipo "Sun 22 Feb 2026" → nuova data e weekday per quella colonna;
+        * altrimenti la tabella è continuazione del giorno corrente in quella colonna
+          (es. parte bassa di un giorno spezzato sul foglio successivo);
+    - per ogni tabella con data nota legge le righe voli:
         Flight, Route, A/D, Type, ETA, ETD.
 
     Restituisce un DataFrame con colonne:
         ['Date', 'Weekday', 'Flight', 'Route', 'AD', 'Type', 'ETA', 'ETD']
-        (poi filtreremo i non-PAX).
+        (poi filtrato a PAX).
     """
     records: List[dict] = []
 
     with pdfplumber.open(file_obj) as pdf:
-        # ---- 1) Ricava i centri delle 7 colonne dalla prima pagina ----
+        # larghezza pagina e ampiezza colonne
         first_page = pdf.pages[0]
-        col_centers: List[float] = []
-        for t in first_page.find_tables():
-            rows = t.extract()
-            if not rows:
-                continue
-            first_cell = (rows[0][0] or "").strip()
-            m = DAY_PATTERN.match(first_cell)
-            if m:
-                x0, _, x1, _ = t.bbox
-                xc = 0.5 * (x0 + x1)
-                col_centers.append(xc)
+        page_width = first_page.width
+        col_width = page_width / 7.0
 
-        col_centers = sorted(set(col_centers))
-        if not col_centers:
-            # struttura non riconosciuta
-            return pd.DataFrame(
-                columns=["Date", "Weekday", "Flight", "Route", "AD", "Type", "ETA", "ETD"]
-            )
+        def col_index_from_xc(xc: float) -> int:
+            idx = int(xc / col_width)
+            if idx < 0:
+                idx = 0
+            if idx > 6:
+                idx = 6
+            return idx
 
-        def closest_col_index(xc: float) -> int:
-            return min(range(len(col_centers)), key=lambda i: abs(col_centers[i] - xc))
+        # stato corrente per ogni colonna: data e weekday
+        current_date_by_col = {i: None for i in range(7)}
+        current_weekday_by_col = {i: None for i in range(7)}
 
-        # stato attuale per ogni colonna: data e weekday correnti
-        current_date_by_col = {i: None for i in range(len(col_centers))}
-        current_weekday_by_col = {i: None for i in range(len(col_centers))}
-
-        # ---- 2) Scorri tutte le pagine e tutte le tabelle ----
+        # scorri tutte le pagine
         for page in pdf.pages:
             tables = page.find_tables()
-            # processa dall'alto verso il basso
+            # ordina tabelle dall'alto verso il basso
             tables = sorted(tables, key=lambda t: t.bbox[1])
 
             for t in tables:
@@ -108,28 +95,30 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
 
                 x0, _, x1, _ = t.bbox
                 xc = 0.5 * (x0 + x1)
-                col = closest_col_index(xc)
+                col = col_index_from_xc(xc)
 
                 first_row = rows[0] if rows else []
                 first_cell = (first_row[0] or "").strip() if first_row else ""
                 m = DAY_PATTERN.match(first_cell)
 
-                # Caso 1: tabella con intestazione di giorno ("Mon 16 Feb 2026")
+                # caso 1: tabella con intestazione del giorno (es. "Sun 22 Feb 2026")
                 if m:
                     weekday = m.group(1)
                     day_num = int(m.group(2))
                     cur_date = date(2026, 2, day_num)
                     current_date_by_col[col] = cur_date
                     current_weekday_by_col[col] = weekday
-                    start_idx = 2  # riga 1 = header "Flight Route A/D Type ETA ETD"
+                    start_idx = 2  # riga 1 = header "Flight RouteA/D Type ETA ETD"
 
-                # Caso 2: tabella senza data, ma con giorno corrente noto
+                # caso 2: continuazione del giorno corrente di quella colonna
                 else:
-                    # ignora tabelle mini / globali che non hanno senso (es. box vuoti, header generale)
-                    if len(rows) <= 1:
+                    cur_date = current_date_by_col[col]
+                    cur_weekday = current_weekday_by_col[col]
+                    if cur_date is None or cur_weekday is None:
+                        # tabella fuori da una colonna "attiva": ignoro
                         continue
 
-                    # se la prima cella è "Flight" è solo un header ripetuto
+                    # se la prima cella è "Flight", è un header ripetuto
                     if first_cell.lower() == "flight":
                         start_idx = 1
                     else:
@@ -137,12 +126,10 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
 
                 cur_date = current_date_by_col[col]
                 cur_weekday = current_weekday_by_col[col]
-
-                # se non abbiamo ancora una data per questa colonna, non sappiamo cosa farcene
                 if cur_date is None or cur_weekday is None:
                     continue
 
-                # Estraggo i voli
+                # estrai righe voli
                 for row in rows[start_idx:]:
                     if not row or not row[0]:
                         continue
@@ -177,13 +164,13 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
 
     df = pd.DataFrame(records)
 
-    # Normalizzazioni base
+    # normalizzazione
     df["Type"] = df["Type"].str.upper().str.strip()
     df["AD"] = df["AD"].str.upper().str.strip()
     df["ETA"] = df["ETA"].str.strip()
     df["ETD"] = df["ETD"].str.strip()
 
-    # Solo voli PAX (CARGO fuori automaticamente)
+    # solo PAX (CARGO esclusi automaticamente)
     df = df[df["Type"] == "PAX"].copy()
     df.replace({"": None}, inplace=True)
 
@@ -339,7 +326,7 @@ def main():
         mime="text/csv",
     )
 
-    # Debug / verifica nel sidebar: controlla che ci siano tutte le date 1–28
+    # Debug / verifica nel sidebar
     with st.sidebar.expander("Dettagli dataset", expanded=False):
         st.write("Date riconosciute:")
         st.write(sorted(flights_df["Date"].unique()))
