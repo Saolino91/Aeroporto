@@ -36,14 +36,14 @@ WEEKDAY_LABELS_IT = {
 
 
 # =========================
-# Parsing PDF (tabella per tabella)
+# Parsing PDF (tabella per tabella, su TUTTE le pagine)
 # =========================
 
 def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
     """
-    Parser specifico per il PDF "orario voli febbraio 2026".
+    Parser per il PDF "orario voli febbraio 2026".
 
-    Ogni giorno è una tabella con:
+    Ogni tabella valida ha:
         riga 0: 'Mon 2 Feb 2026'
         riga 1: 'Flight','Route','A/D','Type','ETA','ETD'
         righe successive: dati voli
@@ -63,6 +63,7 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
         for page in pdf.pages:
             tables = page.extract_tables()
             for tbl in tables:
+                # scarta tabelle troppo corte (non possono essere giorni)
                 if not tbl or len(tbl) < 3:
                     continue
 
@@ -70,16 +71,15 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
                 first_cell = (first_row[0] or "").strip() if first_row else ""
                 m = day_pattern.match(first_cell)
                 if not m:
-                    # non è una tabella giornaliera
+                    # non è una tabella giornaliera → ignora
                     continue
 
                 weekday = m.group(1)          # es. "Mon"
                 day = int(m.group(2))         # es. 2
                 current_date = date(2026, 2, day)
 
-                # header teorico in tbl[1], ma non ci serve per logica
+                # righe di dati: da index 2 in poi
                 for row in tbl[2:]:
-                    # riga dati: [Flight, Route, A/D, Type, ETA, ETD, ...]
                     if not row or not row[0]:
                         continue
 
@@ -119,7 +119,7 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
     df["ETA"] = df["ETA"].str.strip()
     df["ETD"] = df["ETD"].str.strip()
 
-    # Solo PAX, quindi CARGO automaticamente fuori
+    # Solo PAX ⇒ CARGO automaticamente esclusi
     df = df[df["Type"] == "PAX"].copy()
 
     # Sostituisci stringhe vuote con None per ETA/ETD
@@ -153,7 +153,7 @@ def build_matrix_for_weekday(flights: pd.DataFrame, weekday: str) -> pd.DataFram
     """
     Matrice per un dato weekday:
 
-    - Righe = 3 campi espliciti:
+    - Righe = 3 campi:
         Flight, Route, A/D
     - Colonne = date (es. "02-02", "09-02", ...)
     - Celle = ETA (se arrivo) o ETD (se partenza)
@@ -279,13 +279,13 @@ def main():
         mime="text/csv",
     )
 
-    # Info extra nel sidebar
+    # Info extra nel sidebar: qui puoi verificare che ci siano TUTTE le date 1–28
     with st.sidebar.expander("Dettagli dataset", expanded=False):
         st.write("Date riconosciute:")
         st.write(sorted(flights_df["Date"].unique()))
-        st.write("Numero voli PAX per weekday:")
+        st.write("Numero voli PAX per data:")
         st.dataframe(
-            flights_df.groupby("Weekday")["Flight"].count().rename("N_voli").to_frame()
+            flights_df.groupby("Date")["Flight"].count().rename("N_voli").to_frame()
         )
 
 
