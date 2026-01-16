@@ -5,8 +5,9 @@ App Streamlit per:
 1. Caricare un PDF con orari voli (qualsiasi mese, tipo Feb/Mar 2026).
 2. Parsare i voli PAX, anche quando un giorno è spezzato su più tabelle / pagine.
 3. Raggruppare per giorno della settimana.
-4. Visualizzare una matrice voli × date con interfaccia curata.
+4. Visualizzare una matrice voli × date con interfaccia curata e filtri.
 5. Esportare la matrice in CSV.
+6. Visualizzare un grafico a linee Arrivi/Partenze per giorno.
 """
 
 import io
@@ -100,8 +101,7 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
         # scorri tutte le pagine
         for page in pdf.pages:
             tables = page.find_tables()
-            # ordina tabelle dall'alto verso il basso
-            tables = sorted(tables, key=lambda t: t.bbox[1])
+            tables = sorted(tables, key=lambda t: t.bbox[1])  # dall'alto in basso
 
             for t in tables:
                 rows = t.extract()
@@ -125,7 +125,6 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
 
                     month_num = MONTH_MAP.get(month_str)
                     if month_num is None:
-                        # mese non riconosciuto → salta questa tabella
                         current_date_by_col[col] = None
                         current_weekday_by_col[col] = None
                         continue
@@ -140,10 +139,8 @@ def parse_pdf_to_flights_df(file_obj: io.BytesIO) -> pd.DataFrame:
                     cur_date = current_date_by_col[col]
                     cur_weekday = current_weekday_by_col[col]
                     if cur_date is None or cur_weekday is None:
-                        # tabella fuori da una colonna "attiva": ignora
                         continue
 
-                    # se la prima cella è "Flight", è un header ripetuto
                     if first_cell.lower() == "flight":
                         start_idx = 1
                     else:
@@ -229,7 +226,7 @@ def build_matrix_for_weekday(flights: pd.DataFrame, weekday: str) -> pd.DataFram
 
     - Righe = 3 campi:
         Flight, Route, A/D
-    - Colonne = date (es. "02-02", "09-02", "16-02", "23-02")
+    - Colonne = date del periodo (dd-mm)
     - Celle = ETA (se arrivo) o ETD (se partenza)
     """
     if flights.empty:
@@ -245,7 +242,6 @@ def build_matrix_for_weekday(flights: pd.DataFrame, weekday: str) -> pd.DataFram
     if subset.empty:
         return pd.DataFrame()
 
-    # Pivot con indice multiplo: Flight, Route, AD
     matrix = subset.pivot_table(
         index=["Flight", "Route", "AD"],
         columns="Date",
@@ -253,13 +249,9 @@ def build_matrix_for_weekday(flights: pd.DataFrame, weekday: str) -> pd.DataFram
         aggfunc="first",
     )
 
-    # Colonne in ordine di data
     matrix = matrix.reindex(sorted(matrix.columns), axis=1)
-
-    # Flight, Route, AD tornano colonne normali
     matrix = matrix.reset_index()
 
-    # Rinomina colonne data in "dd-mm"
     new_cols = []
     for c in matrix.columns:
         if isinstance(c, date):
@@ -268,9 +260,7 @@ def build_matrix_for_weekday(flights: pd.DataFrame, weekday: str) -> pd.DataFram
             new_cols.append(c)
     matrix.columns = new_cols
 
-    # Ordina le righe
     matrix = matrix.sort_values(by=["Flight", "Route", "AD"]).reset_index(drop=True)
-
     return matrix
 
 
@@ -306,7 +296,6 @@ def style_time(row: pd.Series):
 
     styles = []
     for col in row.index:
-        # non coloriamo le colonne descrittive
         if col in ("Codice Volo", "Aeroporto", "AD"):
             styles.append("")
             continue
@@ -398,7 +387,6 @@ def main():
         }
 
         .uploadedFile { font-size: 0.9rem !important; }
-
         </style>
         """,
         unsafe_allow_html=True,
@@ -523,30 +511,108 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Rinomina colonne per la visualizzazione
-    display_df = matrix_df.rename(columns={"Flight": "Codice Volo", "Route": "Aeroporto"})
-
-    # Stile AD + orari
-    if "AD" in display_df.columns:
-        styled_df = (
-            display_df
-            .style
-            .apply(style_time, axis=1)
-            .applymap(style_ad, subset=["AD"])
+    # --------- FILTRI MATRICE ---------
+    with st.expander("Filtri matrice", expanded=False):
+        flight_filter = st.text_input(
+            "Filtra per Codice Volo (contiene)",
+            key="flt_flight",
+            placeholder="Es. FR, EN8, DX1702..."
         )
+
+        airport_options = sorted(matrix_df["Route"].unique())
+        selected_airports = st.multiselect(
+            "Filtra per Aeroporto",
+            options=airport_options,
+            key="flt_airport",
+        )
+
+        ad_choice = st.radio(
+            "Tipo di movimento",
+            ["Arrivi e partenze", "Solo arrivi (A)", "Solo partenze (P)"],
+            horizontal=True,
+            key="flt_ad",
+        )
+
+    # Applica i filtri alla matrice
+    matrix_filtered = matrix_df.copy()
+
+    if flight_filter:
+        matrix_filtered = matrix_filtered[
+            matrix_filtered["Flight"].str.contains(flight_filter, case=False, na=False)
+        ]
+
+    if selected_airports:
+        matrix_filtered = matrix_filtered[
+            matrix_filtered["Route"].isin(selected_airports)
+        ]
+
+    if ad_choice == "Solo arrivi (A)":
+        matrix_filtered = matrix_filtered[matrix_filtered["AD"] == "A"]
+    elif ad_choice == "Solo partenze (P)":
+        matrix_filtered = matrix_filtered[matrix_filtered["AD"] == "P"]
+
+    if matrix_filtered.empty:
+        st.warning("Nessun volo corrisponde ai filtri impostati.")
     else:
-        styled_df = display_df.style
+        # Rinomina colonne per la visualizzazione
+        display_df = matrix_filtered.rename(
+            columns={"Flight": "Codice Volo", "Route": "Aeroporto"}
+        )
 
-    st.dataframe(styled_df, use_container_width=True, height=650)
+        # Stile AD + orari
+        if "AD" in display_df.columns:
+            styled_df = (
+                display_df
+                .style
+                .apply(style_time, axis=1)
+                .applymap(style_ad, subset=["AD"])
+            )
+        else:
+            styled_df = display_df.style
 
-    # Export CSV
-    csv_buffer = display_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="⬇️ Scarica matrice in CSV",
-        data=csv_buffer,
-        file_name=f"flight_matrix_{label_it.lower()}.csv",
-        mime="text/csv",
-    )
+        st.dataframe(styled_df, use_container_width=True, height=650)
+
+        # Export CSV
+        csv_buffer = display_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="⬇️ Scarica matrice in CSV",
+            data=csv_buffer,
+            file_name=f"flight_matrix_{label_it.lower()}.csv",
+            mime="text/csv",
+        )
+
+    # --------- GRAFICO ARRIVI/PARTENZE PER GIORNO ---------
+    st.markdown("### Andamento giornaliero Arrivi / Partenze")
+
+    chart_df = flights_df.copy()
+
+    def map_dir(ad: str) -> Optional[str]:
+        if ad == "A":
+            return "Arrivi"
+        if ad in ("P", "D", "DEP", "DEPT", "DEPARTURE"):
+            return "Partenze"
+        return None
+
+    chart_df["Dir"] = chart_df["AD"].map(map_dir)
+    chart_df = chart_df.dropna(subset=["Dir"])
+
+    if not chart_df.empty:
+        daily_counts = (
+            chart_df.groupby(["Date", "Dir"])["Flight"]
+            .count()
+            .unstack("Dir")
+            .fillna(0)
+            .sort_index()
+        )
+
+        # garantiamo sempre le due colonne, anche se una categoria manca
+        for col in ["Arrivi", "Partenze"]:
+            if col not in daily_counts.columns:
+                daily_counts[col] = 0
+
+        st.line_chart(daily_counts[["Arrivi", "Partenze"]])
+    else:
+        st.info("Nessun dato disponibile per costruire il grafico Arrivi/Partenze.")
 
 
 if __name__ == "__main__":
