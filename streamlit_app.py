@@ -308,7 +308,6 @@ def main():
     st.markdown(
         """
         <style>
-        /* Riduci un po' il padding globale */
         .block-container {
             padding-top: 1.5rem;
             padding-bottom: 2rem;
@@ -316,12 +315,10 @@ def main():
             padding-right: 2rem;
         }
 
-        /* Titolo centrale */
         h1 {
             text-align: center;
         }
 
-        /* Card container */
         .info-card {
             background: rgba(15,23,42,0.9);
             padding: 1rem 1.2rem;
@@ -333,7 +330,6 @@ def main():
             margin-bottom: 0.2rem;
         }
 
-        /* Badge giorno settimana */
         .day-badge {
             display: inline-flex;
             align-items: center;
@@ -352,7 +348,6 @@ def main():
             background: #38bdf8;
         }
 
-        /* Legend pill */
         .legend-pill {
             display: inline-flex;
             align-items: center;
@@ -377,7 +372,6 @@ def main():
             background: #f97373;
         }
 
-        /* Upload label più compatta */
         .uploadedFile { font-size: 0.9rem !important; }
 
         </style>
@@ -406,7 +400,7 @@ def main():
             unsafe_allow_html=True,
         )
 
-    st.write("")  # piccolo spazio
+    st.write("")
 
     uploaded_file = st.file_uploader("Carica il PDF con gli orari dei voli", type=["pdf"])
 
@@ -422,7 +416,7 @@ def main():
         st.error("Non sono stati trovati voli PAX o la struttura del PDF non è riconosciuta.")
         return
 
-    # Piccole metriche di riepilogo
+    # Piccole metriche di riepilogo globali
     unique_days = sorted(flights_df["Date"].unique())
     num_days = len(unique_days)
     num_flights = len(flights_df)
@@ -462,11 +456,16 @@ def main():
         st.warning("Per il giorno selezionato non sono stati trovati voli PAX con orari validi.")
         return
 
-    # Badge con giorno della settimana
+    # Dati per la tipologia di giorno selezionata
     label_it = WEEKDAY_LABELS_IT.get(selected_weekday, selected_weekday)
+    weekday_ops = flights_df[flights_df["Weekday"] == selected_weekday]
+    weekday_flights_count = len(weekday_ops)
+    weekday_dates_count = weekday_ops["Date"].nunique()
+
+    # Badge con giorno della settimana
     st.markdown(
         f"""
-        <div style="margin-top: 1.2rem; margin-bottom: 0.4rem;">
+        <div style="margin-top: 1.2rem; margin-bottom: 0.3rem;">
             <span class="day-badge">
                 <span class="day-dot"></span>
                 <span>{label_it}</span>
@@ -476,10 +475,16 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # Numero voli per tipologia di giorno
+    st.markdown(
+        f"**Voli PAX per questo tipo di giorno:** {weekday_flights_count} "
+        f"(su {weekday_dates_count} {label_it.lower()} di febbraio)"
+    )
+
     # Legend arrivi/partenze
     st.markdown(
         """
-        <div style="margin-bottom: 0.6rem;">
+        <div style="margin-bottom: 0.6rem; margin-top: 0.2rem;">
             <span class="legend-pill">
                 <span class="legend-color-arr"></span>
                 <span>Arrivi (A)</span>
@@ -517,6 +522,7 @@ def main():
         file_name=f"flight_matrix_{label_it.lower()}.csv",
         mime="text/csv",
     )
+
 
 
 if __name__ == "__main__":
