@@ -259,9 +259,9 @@ def style_ad(val: str) -> str:
     - A → verde
     """
     if val == "P":
-        return "color: red;"
+        return "color: #f97373;"  # rosso soft
     if val == "A":
-        return "color: green;"
+        return "color: #4ade80;"  # verde soft
     return ""
 
 
@@ -271,13 +271,12 @@ def style_time(row: pd.Series):
     - se AD = P → orari rossi
     - se AD = A → orari verdi
     """
-    # in display_df la colonna è AD, non A/D
     ad = row.get("AD", None)
     color = None
     if ad == "P":
-        color = "red"
+        color = "#f97373"
     elif ad == "A":
-        color = "green"
+        color = "#4ade80"
 
     styles = []
     for col in row.index:
@@ -301,25 +300,113 @@ def style_time(row: pd.Series):
 def main():
     st.set_page_config(
         page_title="Flight Matrix",
+        page_icon="✈️",
         layout="wide",
+    )
+
+    # ---- CSS custom per look più moderno ----
+    st.markdown(
+        """
+        <style>
+        /* Riduci un po' il padding globale */
+        .block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 2rem;
+            padding-left: 2rem;
+            padding-right: 2rem;
+        }
+
+        /* Titolo centrale */
+        h1 {
+            text-align: center;
+        }
+
+        /* Card container */
+        .info-card {
+            background: rgba(15,23,42,0.9);
+            padding: 1rem 1.2rem;
+            border-radius: 0.9rem;
+            border: 1px solid rgba(148,163,184,0.35);
+        }
+
+        .info-card p {
+            margin-bottom: 0.2rem;
+        }
+
+        /* Badge giorno settimana */
+        .day-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid rgba(148,163,184,0.8);
+            background: rgba(15,23,42,0.9);
+            font-size: 0.9rem;
+            gap: 0.4rem;
+        }
+
+        .day-dot {
+            width: 0.6rem;
+            height: 0.6rem;
+            border-radius: 999px;
+            background: #38bdf8;
+        }
+
+        /* Legend pill */
+        .legend-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 999px;
+            border: 1px solid rgba(148,163,184,0.4);
+            font-size: 0.8rem;
+            margin-right: 0.4rem;
+        }
+
+        .legend-color-arr {
+            width: 0.9rem;
+            height: 0.35rem;
+            border-radius: 999px;
+            background: #4ade80;
+        }
+        .legend-color-dep {
+            width: 0.9rem;
+            height: 0.35rem;
+            border-radius: 999px;
+            background: #f97373;
+        }
+
+        /* Upload label più compatta */
+        .uploadedFile { font-size: 0.9rem !important; }
+
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
     # Titolo con icone aereo
     st.title("✈️ Flight Matrix")
 
-    st.markdown(
-        """
-🛫🛬  
-Carica il **PDF con gli orari dei voli**.
+    # Intro card
+    with st.container():
+        st.markdown(
+            """
+            <div class="info-card">
+                <p>🛫🛬 <strong>Carica il PDF con gli orari dei voli</strong>.</p>
+                <p style="margin-top:0.35rem;">L'app:</p>
+                <ul style="margin-top:0.15rem;">
+                    <li>considera <strong>solo voli passeggeri (PAX)</strong></li>
+                    <li>esclude i voli <strong>CARGO</strong></li>
+                    <li>raggruppa per <strong>giorno della settimana</strong></li>
+                    <li>mostra una <strong>matrice</strong> con i voli per tipologia giorno</li>
+                </ul>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-L'app:
-
-- considera **solo voli passeggeri (PAX)**
-- esclude i voli **CARGO**
-- raggruppa per **giorno della settimana**
-- mostra una **matrice** con i voli per tipologia giorno
-        """
-    )
+    st.write("")  # piccolo spazio
 
     uploaded_file = st.file_uploader("Carica il PDF con gli orari dei voli", type=["pdf"])
 
@@ -335,7 +422,25 @@ L'app:
         st.error("Non sono stati trovati voli PAX o la struttura del PDF non è riconosciuta.")
         return
 
-    st.success(f"Parsing completato. Voli PAX trovati: **{len(flights_df)}**.")
+    # Piccole metriche di riepilogo
+    unique_days = sorted(flights_df["Date"].unique())
+    num_days = len(unique_days)
+    num_flights = len(flights_df)
+
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        st.metric("Voli PAX estratti", num_flights)
+    with col2:
+        st.metric("Giorni coperti", num_days)
+    with col3:
+        if num_days > 0:
+            start = unique_days[0]
+            end = unique_days[-1]
+            st.write(
+                f"📆 Periodo: **{start.strftime('%d/%m/%Y')} – {end.strftime('%d/%m/%Y')}**"
+            )
+
+    st.success("Parsing completato.")
 
     # Giorni effettivamente presenti
     weekdays_present = sorted(
@@ -343,6 +448,7 @@ L'app:
         key=lambda x: WEEKDAY_ORDER.index(x),
     )
 
+    # Sidebar
     st.sidebar.header("Filtro giorno")
     selected_weekday = st.sidebar.selectbox(
         "Seleziona giorno della settimana",
@@ -356,9 +462,36 @@ L'app:
         st.warning("Per il giorno selezionato non sono stati trovati voli PAX con orari validi.")
         return
 
-    # Sottotitolo: solo giorno della settimana in italiano
+    # Badge con giorno della settimana
     label_it = WEEKDAY_LABELS_IT.get(selected_weekday, selected_weekday)
-    st.subheader(label_it)
+    st.markdown(
+        f"""
+        <div style="margin-top: 1.2rem; margin-bottom: 0.4rem;">
+            <span class="day-badge">
+                <span class="day-dot"></span>
+                <span>{label_it}</span>
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Legend arrivi/partenze
+    st.markdown(
+        """
+        <div style="margin-bottom: 0.6rem;">
+            <span class="legend-pill">
+                <span class="legend-color-arr"></span>
+                <span>Arrivi (A)</span>
+            </span>
+            <span class="legend-pill">
+                <span class="legend-color-dep"></span>
+                <span>Partenze (P)</span>
+            </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # Rinomina colonne per la visualizzazione
     display_df = matrix_df.rename(columns={"Flight": "Codice Volo", "Route": "Aeroporto"})
@@ -374,7 +507,7 @@ L'app:
     else:
         styled_df = display_df.style  # fallback
 
-    st.dataframe(styled_df, use_container_width=True, height=600)
+    st.dataframe(styled_df, use_container_width=True, height=650)
 
     # Export CSV (con intestazioni italiane)
     csv_buffer = display_df.to_csv(index=False).encode("utf-8")
